@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/throttle",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "An app-wide rate limit whose answer to going over is a price, not a 429. 100 requests a minute free, then x402 Payment Required with an offer, settled by CoinPay. Meters every route, so a scraper wearing a browser user agent is charged like any other crawler.",
   "keywords": [
@@ -54,7 +54,7 @@
   },
   "sideEffects": false,
   "dependencies": {
-    "@profullstack/x402-gateway": "^0.5.0"
+    "@profullstack/x402-gateway": "^0.6.0"
   },
   "scripts": {
     "test": "node --test"
