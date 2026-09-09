@@ -245,3 +245,14 @@ describe('credentialFrom', () => {
     assert.ok(await anon.handle(req()));
   });
 });
+
+describe('a gateway that cannot take money', () => {
+  it('refuses with 429 rather than a 402 nobody can pay', async () => {
+    // No coinpay key, no payTo: the offer would be an empty accepts list.
+    const unpaid = createGateway({ siteUrl: SITE });
+    const throttle = createThrottle({ limit: 1, gateway: unpaid });
+    const answer = await drain(throttle, 3);
+    assert.equal(answer.status, 429);
+    assert.equal(answer.headers.get('retry-after'), '60');
+  });
+});

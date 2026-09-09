@@ -143,7 +143,13 @@ export function createThrottle(options = {}) {
         // Telling someone must never cost the caller its answer.
       }
     }
-    if (!gateway) return tooMany(rule, usage);
+    /*
+     * A gateway with no CoinPay key and no payTo cannot take money, and its
+     * 402 carries an empty `accepts` list -- a price tag on a locked door. A
+     * refusal nobody can buy their way out of is a 429, and saying so is
+     * honest about which one this is.
+     */
+    if (!gateway?.enabled) return tooMany(rule, usage);
     return gateway.sell(request, {
       usage,
       quota: { requests: rule.limit, windowSeconds: rule.windowSeconds },
