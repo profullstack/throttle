@@ -48,8 +48,14 @@ export interface ThrottleOptions {
   store?: QuotaStore;
   /** What to count against. Default: the caller's address, as the edge reported it. */
   identify?: (request: Request) => string | null;
-  /** Never metered, e.g. a request carrying a signed-in session cookie. */
+  /** Never metered, e.g. a health check. */
   exempt?: (request: Request) => boolean;
+  /**
+   * What counts as a credential for the larger budget. Default: an
+   * `Authorization` or `X-API-Key` header. Supply one that also reads a
+   * session cookie so signed-in customers are not metered as anonymous.
+   */
+  credentialFrom?: (request: Request) => string | null;
   /** Extra paths never metered. The gateway's sales page is added for you. */
   openPaths?: string[];
   /** Per-path allowances. Most specific match wins, whatever order they are in. */

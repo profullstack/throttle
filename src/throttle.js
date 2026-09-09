@@ -40,7 +40,8 @@ import { memoryStore } from './store.js';
  * @param {object} [options.gateway]                a @profullstack/x402-gateway; over-limit is answered 402 with its offer
  * @param {object} [options.store]                  shared counter; default is per-process
  * @param {(request: Request) => string|null} [options.identify]  what to count against; default the caller's address
- * @param {(request: Request) => boolean} [options.exempt]        never metered, e.g. a signed-in session
+ * @param {(request: Request) => boolean} [options.exempt]        never metered, e.g. a health check
+ * @param {(request: Request) => string|null} [options.credentialFrom]  what counts as a credential; default an Authorization or X-API-Key header
  * @param {string[]} [options.openPaths]            extra paths never metered
  * @param {Array} [options.rules]                   per-path allowances, most specific wins
  * @param {{limit?: number, ceiling?: number}} [options.credential]  budget for callers presenting a credential
@@ -59,6 +60,14 @@ export function createThrottle(options = {}) {
   const rules = compileRules(options.rules, defaults);
   const gateway = options.gateway ?? null;
   const identify = options.identify ?? addressOf;
+  /*
+   * What counts as a credential. The default reads the request's own auth
+   * headers, but a site whose customers arrive in a browser needs its session
+   * cookie to count too: a signed-in merchant watching a dashboard is not a
+   * scraper, and the alternative -- exempting sessions outright -- hands an
+   * unmetered site to anyone willing to sign up first.
+   */
+  const credentialFrom = options.credentialFrom ?? ((request) => presentedCredential(request.headers));
   const exempt = options.exempt ?? null;
   const onThrottle = options.onThrottle ?? null;
 
@@ -179,7 +188,7 @@ export function createThrottle(options = {}) {
      * budget.
      */
     const honoursCredential = Boolean(credential) && rule.credential !== false;
-    const presented = honoursCredential ? presentedCredential(request.headers) : null;
+    const presented = honoursCredential ? credentialFrom(request) : null;
     if (presented) {
       const ceilingRule = { ...rule, limit: rule.credential?.ceiling ?? credential.ceiling };
       const perKeyRule = { ...rule, limit: rule.credential?.limit ?? credential.limit };

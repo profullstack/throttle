@@ -225,3 +225,23 @@ describe('onThrottle', () => {
     assert.match(seen[0].userAgent, /Chrome\/145/);
   });
 });
+
+describe('credentialFrom', () => {
+  it('lets a session cookie buy the credentialed budget', async () => {
+    // Exempting sessions outright would hand an unmetered site to anyone
+    // willing to sign up first. A session is a credential, not a bypass.
+    const throttle = createThrottle({
+      limit: 2,
+      credential: { limit: 8, ceiling: 100 },
+      credentialFrom: (r) => /session=([^;]+)/.exec(r.headers.get('cookie') ?? '')?.[1] ?? null,
+    });
+    const signedIn = () => req('/dashboard', { cookie: 'session=merchant-1' });
+    for (let i = 0; i < 8; i++) assert.equal(await throttle.handle(signedIn()), null, `hit ${i + 1}`);
+    assert.ok(await throttle.handle(signedIn()), 'a session is still bounded');
+    // ...and an anonymous caller still gets the small one.
+    const anon = createThrottle({ limit: 2, credentialFrom: () => null });
+    await anon.handle(req());
+    await anon.handle(req());
+    assert.ok(await anon.handle(req()));
+  });
+});

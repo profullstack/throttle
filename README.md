@@ -110,7 +110,8 @@ selling the same minute twice.
 | `gateway` | — | an `@profullstack/x402-gateway`; makes over-limit a 402 |
 | `rules` | `[]` | per-path allowances; most specific match wins |
 | `credential` | `{ limit: 600, ceiling: 1200 }` | budget for callers presenting one |
-| `exempt` | — | never metered, e.g. a signed-in session |
+| `exempt` | — | never metered, e.g. a health check |
+| `credentialFrom` | auth headers | what counts as a credential; read the session cookie too |
 | `openPaths` | — | extra paths never metered |
 | `identify` | the caller's address | what to count against |
 | `store` | per-process | supply one to share a count across a fleet |
@@ -141,6 +142,18 @@ nothing here has authenticated any of them.
 Any auth scheme counts, not just `Bearer` — matching Bearer alone once dropped
 a signed wallet's bulk payout into the anonymous bucket, which it exhausted in
 seconds.
+
+A site whose customers arrive in a browser should count its session cookie as a
+credential, so a signed-in merchant watching a dashboard is not metered as an
+anonymous scraper:
+
+```js
+credentialFrom: (request) =>
+  sessionIdFrom(request) ?? presentedCredential(request.headers),
+```
+
+Prefer that to `exempt`. Exempting sessions outright hands an unmetered site to
+anyone willing to sign up first.
 
 `credential: false` on a rule keeps it address-bucketed however the request is
 authenticated. **The sign-in routes need this**, or a brute-force attempt bolts
