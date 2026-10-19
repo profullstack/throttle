@@ -95,6 +95,15 @@ describe('going over', () => {
 });
 
 describe('who is not metered', () => {
+  it('lets a welcome search crawler the gateway vouches for straight through', async () => {
+    const gate = { ...gateway(), isWelcome: (r) => r.headers.get('x-real-ip') === '66.249.73.129' };
+    const throttle = createThrottle({ limit: 1, gateway: gate });
+    for (let i = 0; i < 5; i++) {
+      assert.equal(await throttle.handle(req('/explorer', { 'x-real-ip': '66.249.73.129' })), null);
+    }
+    assert.ok(await drain(throttle, 3), 'everyone else is still metered');
+  });
+
   it('lets a paid pass straight through', async () => {
     const gate = gateway();
     const throttle = createThrottle({ limit: 1, gateway: gate });

@@ -176,6 +176,13 @@ export function createThrottle(options = {}) {
     if (gateway) {
       const token = gateway.passFrom(request);
       if (token && (await gateway.verifyPass(token))) return null;
+      /*
+       * A search crawler whose address matches its name (gateway 0.8+) reads
+       * unmetered. Googlebot walks a large site from a handful of addresses,
+       * outruns any per-address allowance, and a 402 to it is how a site
+       * drops out of the index.
+       */
+      if (typeof gateway.isWelcome === 'function' && gateway.isWelcome(request)) return null;
     }
 
     const key = identify(request);
