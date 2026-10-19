@@ -104,6 +104,17 @@ describe('who is not metered', () => {
     assert.ok(await drain(throttle, 3), 'everyone else is still metered');
   });
 
+  it('with gateway 0.10, spares AI chat fetchers and verified crawlers but meters a copied Googlebot', async () => {
+    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const as = (ua, ip) => () => req('/explorer', { 'user-agent': ua, 'x-real-ip': ip });
+    const claude = as('Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)', '203.0.113.7');
+    const chatgpt = as('Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot', '23.98.142.177');
+    const google = as('Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', '66.249.73.129');
+    const fake = as('Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)', '203.0.113.8');
+    for (const make of [claude, chatgpt, google]) assert.equal(await drain(throttle, 5, make), null);
+    assert.ok(await drain(throttle, 3, fake), 'a copied Googlebot string is metered');
+  });
+
   it('lets a paid pass straight through', async () => {
     const gate = gateway();
     const throttle = createThrottle({ limit: 1, gateway: gate });
