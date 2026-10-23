@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { createGateway, mintPass } from '@profullstack/x402-gateway';
-import { createThrottle } from '../src/index.js';
+import { createThrottle, isSubresource } from '../src/index.js';
 
 const SITE = 'https://example.com';
 const SECRET = 'cp_live_test_secret_0123456789';
@@ -274,5 +274,44 @@ describe('a gateway that cannot take money', () => {
     const answer = await drain(throttle, 3);
     assert.equal(answer.status, 429);
     assert.equal(answer.headers.get('retry-after'), '60');
+  });
+});
+
+describe('subresources', () => {
+  const img = (path = '/1790011595323-i37vhd.x-icon') => req(path, { 'sec-fetch-dest': 'image' });
+  const page = () => req('/admin', { 'sec-fetch-dest': 'document' });
+
+  it('a page full of images never spends the page allowance', async () => {
+    // 2026-10-23: one refresh of an admin list with ~1,500 logos at relative
+    // paths 402'd the admin page itself.
+    const throttle = createThrottle({ limit: 2, subresources: { limit: 50 } });
+    assert.equal(await drain(throttle, 50, img), null);
+    assert.equal(await throttle.handle(page()), null);
+    assert.equal(await throttle.handle(page()), null);
+    assert.ok(await throttle.handle(page()), 'pages still have their own limit');
+  });
+
+  it('are still metered, ten times the page allowance by default', async () => {
+    const throttle = createThrottle({ limit: 2 });
+    assert.equal(throttle.options.subresources.limit, 1000);
+    const capped = createThrottle({ limit: 2, subresources: { limit: 3 } });
+    assert.ok(await drain(capped, 4, img), 'a claimed image is not a free pass');
+  });
+
+  it('count with pages when turned off', async () => {
+    const throttle = createThrottle({ limit: 2, subresources: false });
+    await throttle.handle(img());
+    await throttle.handle(img());
+    assert.ok(await throttle.handle(page()));
+  });
+
+  it('are what Sec-Fetch-Dest says; fetch() and navigations are pages', () => {
+    for (const dest of ['image', 'font', 'style', 'script', 'video']) {
+      assert.equal(isSubresource(req('/', { 'sec-fetch-dest': dest })), true, dest);
+    }
+    for (const dest of ['document', 'empty', 'iframe']) {
+      assert.equal(isSubresource(req('/', { 'sec-fetch-dest': dest })), false, dest);
+    }
+    assert.equal(isSubresource(req('/')), false, 'no header');
   });
 });
