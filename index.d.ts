@@ -62,6 +62,12 @@ export interface ThrottleOptions {
   rules?: ThrottleRule[];
   /** Budget for callers presenting a credential. `false` to treat them as anonymous. */
   credential?: false | CredentialBudget;
+  /**
+   * Images, fonts, scripts and styles (by Sec-Fetch-Dest) count against their
+   * own bucket, so a page full of images never spends the page allowance.
+   * Default 1000 per window; `false` counts them with pages.
+   */
+  subresources?: false | { limit?: number };
   /** Told about every refusal. Its errors are swallowed. */
   onThrottle?: (event: ThrottleEvent) => void | Promise<void>;
 }
@@ -75,12 +81,15 @@ export interface Throttle {
     windowSeconds: number;
     rules: Required<ThrottleRule>[];
     credential: { limit: number; ceiling: number } | null;
+    subresources: { limit: number } | null;
     openPaths: string[];
     gateway: boolean;
   };
 }
 
 export function createThrottle(options?: ThrottleOptions): Throttle;
+/** Whether Sec-Fetch-Dest names an image, font, style, script or media fetch. */
+export function isSubresource(request: Request): boolean;
 
 export function memoryStore(options?: {
   now?: () => number;

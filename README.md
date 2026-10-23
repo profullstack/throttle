@@ -160,6 +160,15 @@ authenticated. **The sign-in routes need this**, or a brute-force attempt bolts
 an `Authorization` header onto every guess and buys itself the integration
 budget.
 
+### Subresources
+
+Images, fonts, scripts and styles (by `Sec-Fetch-Dest`) count against a bucket
+of their own, 1,000 a minute by default, so a page that pulls in hundreds of
+images never spends the reader's page allowance; at worst an image breaks, the
+page does not 402. They are metered rather than exempt because the header is
+the client's to write. `subresources: { limit }` changes the number;
+`subresources: false` counts them with pages, as 0.3 did.
+
 ### Never metered
 
 `/robots.txt`, `/favicon.ico`, `/.well-known/`, and — when a gateway is

@@ -45,6 +45,7 @@ import { memoryStore } from './store.js';
  * @param {string[]} [options.openPaths]            extra paths never metered
  * @param {Array} [options.rules]                   per-path allowances, most specific wins
  * @param {{limit?: number, ceiling?: number}} [options.credential]  budget for callers presenting a credential
+ * @param {false|{limit?: number}} [options.subresources]  separate budget for images, fonts, scripts and styles; default 1000
  * @param {(event: object) => void|Promise<void>} [options.onThrottle]  told about every refusal; its errors are swallowed
  */
 export function createThrottle(options = {}) {
@@ -92,6 +93,19 @@ export function createThrottle(options = {}) {
     ...(gateway ? [gateway.options.path, ...(gateway.options.openPaths ?? [])] : []),
     ...(options.openPaths ?? []),
   ];
+
+  /*
+   * Images, fonts, scripts and styles get a bucket of their own, ten times the
+   * page allowance. On 2026-10-23 one refresh of an admin page that listed
+   * ~1,500 logos at relative paths spent the whole page allowance in a second,
+   * and the page itself answered 402: the reader was billed for markup they
+   * did not write. Kept separate rather than exempt, because Sec-Fetch-Dest is
+   * a header the client writes; a scraper that claims every page is an image
+   * buys itself a bigger bucket, not an unmetered site.
+   */
+  const subresources = options.subresources === false ? null : {
+    limit: positive(options.subresources?.limit, 1000),
+  };
 
   const quotaFor = (rule) => ({
     requests: rule.limit,
@@ -216,6 +230,13 @@ export function createThrottle(options = {}) {
       return null;
     }
 
+    if (subresources && isSubresource(request)) {
+      const assetRule = { ...rule, limit: subresources.limit };
+      const usage = await spend(quotaFor(assetRule), `asset:${rule.path || '*'}:${key}`);
+      if (usage?.overLimit) return refuse(request, assetRule, usage);
+      return null;
+    }
+
     const usage = await spend(quotaFor(rule), `${rule.path || '*'}:${key}`);
     if (usage?.overLimit) return refuse(request, rule, usage);
     return null;
@@ -225,8 +246,19 @@ export function createThrottle(options = {}) {
     handle,
     /** For tests and for a site that wants to reclaim memory on demand. */
     store,
-    options: { ...defaults, rules, credential, openPaths, gateway: Boolean(gateway) },
+    options: { ...defaults, rules, credential, subresources, openPaths, gateway: Boolean(gateway) },
   };
+}
+
+/**
+ * What a browser fetches to render a page, by its own account
+ * (Sec-Fetch-Dest). A navigation says `document`, fetch() and XHR say `empty`;
+ * both stay on the page allowance.
+ */
+const SUBRESOURCE = new Set(['image', 'font', 'style', 'script', 'audio', 'video', 'track', 'manifest']);
+
+export function isSubresource(request) {
+  return SUBRESOURCE.has(request.headers.get('sec-fetch-dest') ?? '');
 }
 
 function positive(value, fallback) {
