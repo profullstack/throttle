@@ -1,8 +1,8 @@
 {
   "name": "@profullstack/throttle",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "type": "module",
-  "description": "An app-wide rate limit whose answer to going over is a price, not a 429. 100 requests a minute free, then x402 Payment Required with an offer, settled by CoinPay. Meters every route, so a scraper wearing a browser user agent is charged like any other crawler.",
+  "description": "An app-wide rate limit whose answer to going over is a price, not a 429. 100 requests a minute free (times 5 headroom), then x402 Payment Required with an offer, settled by CoinPay. Meters every route, so a scraper wearing a browser user agent is charged like any other crawler.",
   "keywords": [
     "rate-limit",
     "throttle",

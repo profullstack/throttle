@@ -3,6 +3,8 @@ import type { Gateway, QuotaStore } from '@profullstack/x402-gateway';
 /** The house default: a hundred requests a minute, per caller, everywhere. */
 export const DEFAULT_LIMIT: 100;
 export const DEFAULT_WINDOW_SECONDS: 60;
+/** Every limit is multiplied by this unless the rule is a brute-force guard. */
+export const DEFAULT_HEADROOM: 5;
 export const ALWAYS_OPEN: string[];
 
 export interface ThrottleRule {
@@ -18,6 +20,11 @@ export interface ThrottleRule {
    * request is authenticated — what the sign-in routes need.
    */
   credential?: false | { limit?: number; ceiling?: number };
+  /**
+   * A brute-force guard: its numbers are used as written, never multiplied by
+   * headroom. Implied by `credential: false` and by auth-looking paths.
+   */
+  guard?: boolean;
 }
 
 export interface CredentialBudget {
@@ -38,10 +45,15 @@ export interface ThrottleEvent {
 }
 
 export interface ThrottleOptions {
-  /** Default 100. */
+  /** Default 100, before headroom. */
   limit?: number;
   /** Default 60. */
   windowSeconds?: number;
+  /**
+   * Multiplier on every limit (default, rules, credential budget, subresources)
+   * except brute-force guards. Default 5; pass 1 to use the numbers as written.
+   */
+  headroom?: number;
   /** Over-limit is answered 402 with this gateway's offer instead of 429. */
   gateway?: Gateway | null;
   /** Shared counter. Default: one per process, so each instance grants its own. */
@@ -79,6 +91,7 @@ export interface Throttle {
   options: {
     limit: number;
     windowSeconds: number;
+    headroom: number;
     rules: Required<ThrottleRule>[];
     credential: { limit: number; ceiling: number } | null;
     subresources: { limit: number } | null;
@@ -106,3 +119,7 @@ export function compileRules(
   defaults: { limit: number; windowSeconds: number },
 ): Required<ThrottleRule>[];
 export function ruleFor<T>(compiled: Required<ThrottleRule>[], path: string, defaults: T): T;
+/** Whether a compiled rule is a brute-force guard (never scaled by headroom). */
+export function isGuard(rule: { path: string; credential?: unknown; guard?: boolean }): boolean;
+/** A compiled rule with its limits multiplied by `headroom`, unless it is a guard. */
+export function withHeadroom<T extends { path: string; limit: number }>(rule: T, headroom: number): T;

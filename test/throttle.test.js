@@ -29,7 +29,7 @@ async function drain(throttle, n, make = req) {
 
 describe('the default allowance', () => {
   it('is a hundred requests a minute, and lets ninety-nine through', async () => {
-    const throttle = createThrottle({});
+    const throttle = createThrottle({ headroom: 1,});
     assert.equal(throttle.options.limit, 100);
     assert.equal(throttle.options.windowSeconds, 60);
     for (let i = 0; i < 100; i++) {
@@ -41,14 +41,14 @@ describe('the default allowance', () => {
   it('meters page routes, not just /api/', async () => {
     // The whole point: the scraper that started this walked /explorer/**,
     // which every /api/-scoped limiter in the fleet ignored.
-    const throttle = createThrottle({ limit: 2 });
+    const throttle = createThrottle({ headroom: 1, limit: 2 });
     await throttle.handle(req('/explorer/btc/address/bc1q'));
     await throttle.handle(req('/explorer/sol/tx/5LU'));
     assert.ok(await throttle.handle(req('/explorer/xrp/block/1')));
   });
 
   it('counts each caller separately', async () => {
-    const throttle = createThrottle({ limit: 1 });
+    const throttle = createThrottle({ headroom: 1, limit: 1 });
     assert.equal(await throttle.handle(req('/', { 'x-real-ip': '198.51.100.1' })), null);
     assert.equal(await throttle.handle(req('/', { 'x-real-ip': '198.51.100.2' })), null);
     assert.ok(await throttle.handle(req('/', { 'x-real-ip': '198.51.100.1' })));
@@ -57,7 +57,7 @@ describe('the default allowance', () => {
 
 describe('going over', () => {
   it('is 429 when there is nothing to sell', async () => {
-    const throttle = createThrottle({ limit: 1 });
+    const throttle = createThrottle({ headroom: 1, limit: 1 });
     const answer = await drain(throttle, 3);
     assert.equal(answer.status, 429);
     assert.equal(answer.headers.get('retry-after'), '60');
@@ -66,7 +66,7 @@ describe('going over', () => {
   });
 
   it('is 402 with an offer when there is', async () => {
-    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gateway() });
     const answer = await drain(throttle, 3);
     assert.equal(answer.status, 402);
     const body = await answer.json();
@@ -77,14 +77,14 @@ describe('going over', () => {
   });
 
   it('is the sales page when the caller asked for HTML', async () => {
-    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gateway() });
     const answer = await drain(throttle, 3, () => req('/explorer', { accept: 'text/html' }));
     assert.equal(answer.status, 402);
     assert.match(answer.headers.get('content-type'), /text\/html/);
   });
 
   it('quotes the limit that actually stopped the request', async () => {
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 100,
       gateway: gateway(),
       rules: [{ path: '/feed/', limit: 5 }],
@@ -97,7 +97,7 @@ describe('going over', () => {
 describe('who is not metered', () => {
   it('lets a welcome search crawler the gateway vouches for straight through', async () => {
     const gate = { ...gateway(), isWelcome: (r) => r.headers.get('x-real-ip') === '66.249.73.129' };
-    const throttle = createThrottle({ limit: 1, gateway: gate });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gate });
     for (let i = 0; i < 5; i++) {
       assert.equal(await throttle.handle(req('/explorer', { 'x-real-ip': '66.249.73.129' })), null);
     }
@@ -105,7 +105,7 @@ describe('who is not metered', () => {
   });
 
   it('with gateway 0.10, spares AI chat fetchers and verified crawlers but meters a copied Googlebot', async () => {
-    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gateway() });
     const as = (ua, ip) => () => req('/explorer', { 'user-agent': ua, 'x-real-ip': ip });
     const claude = as('Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-User/1.0; +Claude-User@anthropic.com)', '203.0.113.7');
     const chatgpt = as('Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot', '23.98.142.177');
@@ -117,7 +117,7 @@ describe('who is not metered', () => {
 
   it('lets a paid pass straight through', async () => {
     const gate = gateway();
-    const throttle = createThrottle({ limit: 1, gateway: gate });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gate });
     const now = Math.floor(Date.now() / 1000);
     const pass = await mintPass({ secret: SECRET, ref: 'r1', expiresAt: now + 600, now });
     const paid = () => req('/explorer/eth/tx/0xabc', { 'x-crawl-pass': pass.token });
@@ -127,14 +127,14 @@ describe('who is not metered', () => {
   });
 
   it('does not accept a forged pass', async () => {
-    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gateway() });
     const forged = () => req('/x', { 'x-crawl-pass': 'cp_nope.nope' });
     await throttle.handle(forged());
     assert.ok(await throttle.handle(forged()));
   });
 
   it('never meters the page a refused caller has to reach to pay', async () => {
-    const throttle = createThrottle({ limit: 1, gateway: gateway() });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: gateway() });
     for (let i = 0; i < 5; i++) {
       assert.equal(await throttle.handle(req('/crawl')), null);
       assert.equal(await throttle.handle(req('/robots.txt')), null);
@@ -142,7 +142,7 @@ describe('who is not metered', () => {
   });
 
   it('honours exempt, for a signed-in session', async () => {
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 1,
       exempt: (r) => (r.headers.get('cookie') ?? '').includes('session='),
     });
@@ -151,12 +151,12 @@ describe('who is not metered', () => {
   });
 
   it('does not charge a caller for our own edge losing the address', async () => {
-    const throttle = createThrottle({ limit: 1, identify: () => null });
+    const throttle = createThrottle({ headroom: 1, limit: 1, identify: () => null });
     for (let i = 0; i < 5; i++) assert.equal(await throttle.handle(req()), null);
   });
 
   it('lets a rule open a route entirely', async () => {
-    const throttle = createThrottle({ limit: 1, rules: [{ path: '/health', open: true }] });
+    const throttle = createThrottle({ headroom: 1, limit: 1, rules: [{ path: '/health', open: true }] });
     for (let i = 0; i < 5; i++) assert.equal(await throttle.handle(req('/health')), null);
   });
 });
@@ -165,7 +165,7 @@ describe('credentialed callers', () => {
   const withKey = (path = '/api/payments') => req(path, { 'x-api-key': 'k_integration' });
 
   it('get a bigger budget than a browser', async () => {
-    const throttle = createThrottle({ limit: 2, credential: { limit: 10, ceiling: 20 } });
+    const throttle = createThrottle({ headroom: 1, limit: 2, credential: { limit: 10, ceiling: 20 } });
     for (let i = 0; i < 10; i++) {
       assert.equal(await throttle.handle(withKey()), null, `request ${i + 1}`);
     }
@@ -173,7 +173,7 @@ describe('credentialed callers', () => {
   });
 
   it('cannot escape the per-address ceiling by rotating credentials', async () => {
-    const throttle = createThrottle({ limit: 2, credential: { limit: 10, ceiling: 5 } });
+    const throttle = createThrottle({ headroom: 1, limit: 2, credential: { limit: 10, ceiling: 5 } });
     let refused = null;
     for (let i = 0; i < 8; i++) {
       const answer = await throttle.handle(req('/api/x', { 'x-api-key': `k_${i}` }));
@@ -185,7 +185,7 @@ describe('credentialed callers', () => {
   it('reads any auth scheme, not just Bearer', async () => {
     // The CoinPay wallet extension signs `Authorization: Wallet <id>:<sig>:<ts>`;
     // matching Bearer alone dropped a bulk payout into the anonymous bucket.
-    const throttle = createThrottle({ limit: 1, credential: { limit: 6, ceiling: 60 } });
+    const throttle = createThrottle({ headroom: 1, limit: 1, credential: { limit: 6, ceiling: 60 } });
     const wallet = () => req('/api/payouts', { authorization: 'Wallet w1:sig:123' });
     for (let i = 0; i < 6; i++) assert.equal(await throttle.handle(wallet()), null);
     assert.ok(await throttle.handle(wallet()));
@@ -193,7 +193,7 @@ describe('credentialed callers', () => {
 
   it('keeps sign-in address-bucketed however it is credentialed', async () => {
     // Or a brute-force attempt buys the integration budget with one header.
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 100,
       credential: { limit: 600, ceiling: 1200 },
       rules: [{ path: '/api/auth/', limit: 3, credential: false }],
@@ -208,7 +208,7 @@ describe('credentialed callers', () => {
 
 describe('rules', () => {
   it('take the most specific match whatever order they were written in', async () => {
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 100,
       rules: [{ path: '/api/', limit: 50 }, { path: '/api/auth/', limit: 2 }],
     });
@@ -218,7 +218,7 @@ describe('rules', () => {
   });
 
   it('give each rule its own counter', async () => {
-    const throttle = createThrottle({ limit: 2, rules: [{ path: '/feed/', limit: 2 }] });
+    const throttle = createThrottle({ headroom: 1, limit: 2, rules: [{ path: '/feed/', limit: 2 }] });
     await throttle.handle(req('/feed/a'));
     await throttle.handle(req('/feed/b'));
     assert.ok(await throttle.handle(req('/feed/c')), '/feed/ is spent');
@@ -229,7 +229,7 @@ describe('rules', () => {
 describe('onThrottle', () => {
   it('is told about a refusal, and its failure never costs an answer', async () => {
     const seen = [];
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 1,
       onThrottle: (event) => {
         seen.push(event);
@@ -250,7 +250,7 @@ describe('credentialFrom', () => {
   it('lets a session cookie buy the credentialed budget', async () => {
     // Exempting sessions outright would hand an unmetered site to anyone
     // willing to sign up first. A session is a credential, not a bypass.
-    const throttle = createThrottle({
+    const throttle = createThrottle({ headroom: 1,
       limit: 2,
       credential: { limit: 8, ceiling: 100 },
       credentialFrom: (r) => /session=([^;]+)/.exec(r.headers.get('cookie') ?? '')?.[1] ?? null,
@@ -259,7 +259,7 @@ describe('credentialFrom', () => {
     for (let i = 0; i < 8; i++) assert.equal(await throttle.handle(signedIn()), null, `hit ${i + 1}`);
     assert.ok(await throttle.handle(signedIn()), 'a session is still bounded');
     // ...and an anonymous caller still gets the small one.
-    const anon = createThrottle({ limit: 2, credentialFrom: () => null });
+    const anon = createThrottle({ headroom: 1, limit: 2, credentialFrom: () => null });
     await anon.handle(req());
     await anon.handle(req());
     assert.ok(await anon.handle(req()));
@@ -270,7 +270,7 @@ describe('a gateway that cannot take money', () => {
   it('refuses with 429 rather than a 402 nobody can pay', async () => {
     // No coinpay key, no payTo: the offer would be an empty accepts list.
     const unpaid = createGateway({ siteUrl: SITE });
-    const throttle = createThrottle({ limit: 1, gateway: unpaid });
+    const throttle = createThrottle({ headroom: 1, limit: 1, gateway: unpaid });
     const answer = await drain(throttle, 3);
     assert.equal(answer.status, 429);
     assert.equal(answer.headers.get('retry-after'), '60');
@@ -284,7 +284,7 @@ describe('subresources', () => {
   it('a page full of images never spends the page allowance', async () => {
     // 2026-10-23: one refresh of an admin list with ~1,500 logos at relative
     // paths 402'd the admin page itself.
-    const throttle = createThrottle({ limit: 2, subresources: { limit: 50 } });
+    const throttle = createThrottle({ headroom: 1, limit: 2, subresources: { limit: 50 } });
     assert.equal(await drain(throttle, 50, img), null);
     assert.equal(await throttle.handle(page()), null);
     assert.equal(await throttle.handle(page()), null);
@@ -292,14 +292,14 @@ describe('subresources', () => {
   });
 
   it('are still metered, ten times the page allowance by default', async () => {
-    const throttle = createThrottle({ limit: 2 });
+    const throttle = createThrottle({ headroom: 1, limit: 2 });
     assert.equal(throttle.options.subresources.limit, 1000);
-    const capped = createThrottle({ limit: 2, subresources: { limit: 3 } });
+    const capped = createThrottle({ headroom: 1, limit: 2, subresources: { limit: 3 } });
     assert.ok(await drain(capped, 4, img), 'a claimed image is not a free pass');
   });
 
   it('count with pages when turned off', async () => {
-    const throttle = createThrottle({ limit: 2, subresources: false });
+    const throttle = createThrottle({ headroom: 1, limit: 2, subresources: false });
     await throttle.handle(img());
     await throttle.handle(img());
     assert.ok(await throttle.handle(page()));
@@ -313,5 +313,59 @@ describe('subresources', () => {
       assert.equal(isSubresource(req('/', { 'sec-fetch-dest': dest })), false, dest);
     }
     assert.equal(isSubresource(req('/')), false, 'no header');
+  });
+});
+
+describe('headroom', () => {
+  it('multiplies the default allowance by 5 unless told otherwise', async () => {
+    const throttle = createThrottle();
+    assert.equal(throttle.options.headroom, 5);
+    assert.equal(throttle.options.limit, 500);
+    assert.equal(await drain(throttle, 500), null);
+    const refusal = await throttle.handle(req());
+    assert.equal(refusal.status, 429);
+  });
+
+  it('scales rules, the credential budget and subresources', () => {
+    const throttle = createThrottle({
+      rules: [{ path: '/feed/', limit: 30 }, { path: '/api/', limit: 600, credential: { limit: 100, ceiling: 200 } }],
+    });
+    const feed = throttle.options.rules.find((r) => r.path === '/feed/');
+    const api = throttle.options.rules.find((r) => r.path === '/api/');
+    assert.equal(feed.limit, 150);
+    assert.equal(api.limit, 3000);
+    assert.deepEqual(api.credential, { limit: 500, ceiling: 1000 });
+    assert.deepEqual(throttle.options.credential, { limit: 3000, ceiling: 6000 });
+    assert.equal(throttle.options.subresources.limit, 5000);
+  });
+
+  it('never scales a brute-force guard', async () => {
+    const throttle = createThrottle({
+      rules: [
+        { path: '/api/auth/', limit: 10, credential: false },
+        { path: '/login', limit: 10 },
+        { path: '/account/redeem', limit: 20, windowSeconds: 3600, credential: false },
+        { path: '/report', limit: 3, guard: true },
+        { path: '/authors/', limit: 30 },
+      ],
+    });
+    const limitOf = (path) => throttle.options.rules.find((r) => r.path === path).limit;
+    assert.equal(limitOf('/api/auth/'), 10);
+    assert.equal(limitOf('/login'), 10);
+    assert.equal(limitOf('/account/redeem'), 20);
+    assert.equal(limitOf('/report'), 3);
+    assert.equal(limitOf('/authors/'), 150);
+    const refusal = await drain(throttle, 11, () => req('/api/auth/signin'));
+    assert.equal(refusal?.status, 429);
+  });
+
+  it('does not double-scale a rule that inherits the default limit', () => {
+    const throttle = createThrottle({ rules: [{ path: '/x/', windowSeconds: 30 }] });
+    assert.equal(throttle.options.rules[0].limit, 500);
+  });
+
+  it('headroom 1 uses the numbers as written', () => {
+    const throttle = createThrottle({ headroom: 1, limit: 100 });
+    assert.equal(throttle.options.limit, 100);
   });
 });

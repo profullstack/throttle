@@ -17,25 +17,30 @@
  * the caller has just demonstrated it wants more than the free tier and is
  * still holding the request open.
  *
- * A hundred requests a minute is the default. A person reading a site produces
- * a few dozen; a scraper produces that in a second.
+ * A hundred requests a minute is the default, and every number is then
+ * multiplied by `headroom` (5): a heavy reader is never refused, only a
+ * caller five times past what the site considers normal. A person reading a
+ * site produces a few dozen; a scraper produces that in a second.
  */
 
 import { quotaHeaders, spend } from '@profullstack/x402-gateway';
 import { addressOf, fingerprint, presentedCredential } from './identify.js';
 import {
   ALWAYS_OPEN,
+  DEFAULT_HEADROOM,
   DEFAULT_LIMIT,
   DEFAULT_WINDOW_SECONDS,
   compileRules,
   matchesAny,
   ruleFor,
+  withHeadroom,
 } from './rules.js';
 import { memoryStore } from './store.js';
 
 /**
  * @param {object} options
- * @param {number} [options.limit=100]              requests per window, per caller
+ * @param {number} [options.limit=100]              requests per window, per caller, before headroom
+ * @param {number} [options.headroom=5]             multiplier on every limit except brute-force guards; 1 to use the numbers as written
  * @param {number} [options.windowSeconds=60]
  * @param {object} [options.gateway]                a @profullstack/x402-gateway; over-limit is answered 402 with its offer
  * @param {object} [options.store]                  shared counter; default is per-process
@@ -49,16 +54,24 @@ import { memoryStore } from './store.js';
  * @param {(event: object) => void|Promise<void>} [options.onThrottle]  told about every refusal; its errors are swallowed
  */
 export function createThrottle(options = {}) {
-  const defaults = {
+  const headroom = positiveReal(options.headroom, DEFAULT_HEADROOM);
+  const scale = (n) => Math.floor(n * headroom);
+
+  /*
+   * Rules inherit the unscaled default and are scaled once afterwards, so a
+   * rule that leaves out its limit is not multiplied twice.
+   */
+  const base = {
     path: '',
     limit: positive(options.limit, DEFAULT_LIMIT),
     windowSeconds: positive(options.windowSeconds, DEFAULT_WINDOW_SECONDS),
     open: false,
     credential: null,
   };
+  const defaults = { ...base, limit: scale(base.limit) };
 
   const store = options.store?.hit ? options.store : memoryStore();
-  const rules = compileRules(options.rules, defaults);
+  const rules = compileRules(options.rules, base).map((rule) => withHeadroom(rule, headroom));
   const gateway = options.gateway ?? null;
   const identify = options.identify ?? addressOf;
   /*
@@ -79,8 +92,8 @@ export function createThrottle(options = {}) {
    * this layer has not authenticated any of them.
    */
   const credential = options.credential === false ? null : {
-    limit: positive(options.credential?.limit, 600),
-    ceiling: positive(options.credential?.ceiling, 1200),
+    limit: scale(positive(options.credential?.limit, 600)),
+    ceiling: scale(positive(options.credential?.ceiling, 1200)),
   };
 
   /*
@@ -104,7 +117,7 @@ export function createThrottle(options = {}) {
    * buys itself a bigger bucket, not an unmetered site.
    */
   const subresources = options.subresources === false ? null : {
-    limit: positive(options.subresources?.limit, 1000),
+    limit: scale(positive(options.subresources?.limit, 1000)),
   };
 
   const quotaFor = (rule) => ({
@@ -246,7 +259,7 @@ export function createThrottle(options = {}) {
     handle,
     /** For tests and for a site that wants to reclaim memory on demand. */
     store,
-    options: { ...defaults, rules, credential, subresources, openPaths, gateway: Boolean(gateway) },
+    options: { ...defaults, headroom, rules, credential, subresources, openPaths, gateway: Boolean(gateway) },
   };
 }
 
@@ -259,6 +272,11 @@ const SUBRESOURCE = new Set(['image', 'font', 'style', 'script', 'audio', 'video
 
 export function isSubresource(request) {
   return SUBRESOURCE.has(request.headers.get('sec-fetch-dest') ?? '');
+}
+
+function positiveReal(value, fallback) {
+  const n = Number(value);
+  return value !== undefined && value !== null && Number.isFinite(n) && n >= 1 ? n : fallback;
 }
 
 function positive(value, fallback) {

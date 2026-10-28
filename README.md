@@ -70,6 +70,20 @@ export async function proxy(request) {
 Without a `gateway` the same throttle answers `429` with `Retry-After`. That is
 the fallback, not the goal.
 
+## Headroom: only offenders are refused
+
+Since 0.4.0 every number a site configures is multiplied by `headroom` (default
+5): the default allowance, every rule, the credential budget and ceiling, and
+the subresource bucket. Write the limits as "what a normal reader uses"; the
+throttle refuses only a caller five times past that. People were being refused
+for ordinary heavy use when the limits had no room above typical consumption.
+
+Brute-force guards keep the number as written. A rule is a guard when it is
+marked `guard: true`, marked `credential: false` (the sign-in pattern), or its
+path looks like auth (`/auth/`, `/login`, `/signup`, `*-password`, `/reset`,
+`/otp`, `/verify-*`, `/oauth/`, `2fa`/`mfa`). So `{ path: '/api/auth/', limit: 10,
+credential: false }` stays 10 a minute while `/feed/` at 30 becomes 150.
+
 ## What a refused caller sees
 
 ```
@@ -105,7 +119,8 @@ selling the same minute twice.
 
 | Option | Default | |
 |---|---|---|
-| `limit` | `100` | requests per window, per caller |
+| `limit` | `100` | requests per window, per caller, before `headroom` |
+| `headroom` | `5` | multiplier on every limit except brute-force guards; `1` uses the numbers as written |
 | `windowSeconds` | `60` | |
 | `gateway` | — | an `@profullstack/x402-gateway`; makes over-limit a 402 |
 | `rules` | `[]` | per-path allowances; most specific match wins |
