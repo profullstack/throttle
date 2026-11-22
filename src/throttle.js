@@ -31,6 +31,7 @@ import {
   DEFAULT_LIMIT,
   DEFAULT_WINDOW_SECONDS,
   compileRules,
+  isGuard,
   matchesAny,
   ruleFor,
   withHeadroom,
@@ -154,8 +155,13 @@ export function createThrottle(options = {}) {
    * money answers 402 with an offer -- or the sales page, if the caller asked
    * for HTML, which is what makes this survivable for a person who tripped it
    * by accident. Without one there is nothing to sell, so 429.
+   *
+   * A brute-force guard is never sold, gateway or not. Its limit is a cap on
+   * password guesses, not a reading allowance, and offering a pass at the
+   * moment it trips is offering to sell unlimited guessing (0.4.3).
    */
-  async function refuse(request, rule, usage) {
+  async function refuse(request, rule, usage, guard = false) {
+    const sold = !guard && Boolean(gateway?.enabled);
     if (onThrottle) {
       try {
         await onThrottle({
@@ -164,7 +170,8 @@ export function createThrottle(options = {}) {
           limit: rule.limit,
           windowSeconds: rule.windowSeconds,
           count: usage.count,
-          sold: Boolean(gateway?.enabled),
+          sold,
+          guard,
         });
       } catch {
         // Telling someone must never cost the caller its answer.
@@ -176,7 +183,7 @@ export function createThrottle(options = {}) {
      * refusal nobody can buy their way out of is a 429, and saying so is
      * honest about which one this is.
      */
-    if (!gateway?.enabled) return tooMany(rule, usage);
+    if (!sold) return tooMany(rule, usage);
     return gateway.sell(request, {
       usage,
       quota: { requests: rule.limit, windowSeconds: rule.windowSeconds },
@@ -194,13 +201,19 @@ export function createThrottle(options = {}) {
 
     const rule = ruleFor(rules, path, defaults);
     if (rule.open) return null;
+    const guard = isGuard(rule);
 
     /*
      * Whoever already paid is not metered. The pass is the thing being sold;
      * charging a caller that holds one, or counting it toward an allowance it
      * bought its way out of, is selling the same minute twice.
+     *
+     * Except on a brute-force guard. A pass buys reading, never guesses: until
+     * 0.4.3 a 1 USD pass (or a crawler the gateway welcomed) skipped the
+     * sign-in limit entirely, which made unlimited password guessing a
+     * product. Guards are metered for everyone.
      */
-    if (gateway) {
+    if (gateway && !guard) {
       const token = gateway.passFrom(request);
       if (token && (await gateway.verifyPass(token))) return null;
       /*
@@ -238,20 +251,20 @@ export function createThrottle(options = {}) {
        * The host ceiling is what a credential-rotating caller cannot escape,
        * so a denial there beats a healthy per-credential budget.
        */
-      if (ceiling?.overLimit) return refuse(request, ceilingRule, ceiling);
-      if (perKey?.overLimit) return refuse(request, perKeyRule, perKey);
+      if (ceiling?.overLimit) return refuse(request, ceilingRule, ceiling, guard);
+      if (perKey?.overLimit) return refuse(request, perKeyRule, perKey, guard);
       return null;
     }
 
     if (subresources && isSubresource(request)) {
       const assetRule = { ...rule, limit: subresources.limit };
       const usage = await spend(quotaFor(assetRule), `asset:${rule.path || '*'}:${key}`);
-      if (usage?.overLimit) return refuse(request, assetRule, usage);
+      if (usage?.overLimit) return refuse(request, assetRule, usage, guard);
       return null;
     }
 
     const usage = await spend(quotaFor(rule), `${rule.path || '*'}:${key}`);
-    if (usage?.overLimit) return refuse(request, rule, usage);
+    if (usage?.overLimit) return refuse(request, rule, usage, guard);
     return null;
   }
 

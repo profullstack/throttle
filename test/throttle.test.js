@@ -369,3 +369,72 @@ describe('headroom', () => {
     assert.equal(throttle.options.limit, 100);
   });
 });
+
+describe('brute-force guards with a gateway (security, 0.4.3)', () => {
+  const rules = [
+    { path: '/api/auth/', limit: 2, credential: false },
+    { path: '/report', limit: 2, guard: true },
+  ];
+  const login = (extra = {}) => () => req('/api/auth/login', extra);
+  const livePass = async () => {
+    const now = Math.floor(Date.now() / 1000);
+    return (await mintPass({ secret: SECRET, ref: 'r-guard', expiresAt: now + 600, now })).token;
+  };
+
+  it('answers over-limit with a plain 429, never a 402 offer', async () => {
+    const events = [];
+    const throttle = createThrottle({ rules, gateway: gateway(), onThrottle: (e) => events.push(e) });
+    const answer = await drain(throttle, 4, login());
+    assert.equal(answer.status, 429);
+    assert.equal(answer.headers.get('retry-after'), '60');
+    assert.equal(answer.headers.get('ratelimit-limit'), '2');
+    const body = await answer.json();
+    assert.equal(body.error, 'Too many requests');
+    assert.equal(body.accepts, undefined, 'no x402 offer');
+    assert.equal(body.pass, undefined, 'no pass for sale');
+    assert.equal(events[0].sold, false);
+    assert.equal(events[0].guard, true);
+  });
+
+  it('is a 429 even when the caller asks for HTML', async () => {
+    const throttle = createThrottle({ rules, gateway: gateway() });
+    const answer = await drain(throttle, 4, login({ accept: 'text/html' }));
+    assert.equal(answer.status, 429);
+  });
+
+  it('meters a caller holding a valid pass', async () => {
+    const throttle = createThrottle({ rules, gateway: gateway() });
+    const token = await livePass();
+    const answer = await drain(throttle, 4, login({ 'x-crawl-pass': token }));
+    assert.equal(answer?.status, 429, 'a pass buys reading, not guesses');
+  });
+
+  it('meters a crawler the gateway welcomes', async () => {
+    const gate = { ...gateway(), isWelcome: () => true };
+    const throttle = createThrottle({ rules, gateway: gate });
+    const answer = await drain(throttle, 4, login());
+    assert.equal(answer?.status, 429);
+  });
+
+  it('covers guard: true rules too', async () => {
+    const throttle = createThrottle({ rules, gateway: gateway() });
+    const token = await livePass();
+    const answer = await drain(throttle, 4, () => req('/report', { 'x-crawl-pass': token }));
+    assert.equal(answer?.status, 429);
+  });
+
+  it('leaves non-guard rules selling and honouring passes', async () => {
+    const events = [];
+    const throttle = createThrottle({ headroom: 1, limit: 1, rules, gateway: gateway(), onThrottle: (e) => events.push(e) });
+    const answer = await drain(throttle, 3, () => req('/explorer'));
+    assert.equal(answer.status, 402);
+    assert.ok((await answer.json()).accepts.length > 0);
+    assert.equal(events[0].sold, true);
+    assert.equal(events[0].guard, false);
+    const token = await livePass();
+    assert.equal(await drain(throttle, 5, () => req('/explorer', { 'x-crawl-pass': token })), null);
+    const gate = { ...gateway(), isWelcome: () => true };
+    const welcoming = createThrottle({ headroom: 1, limit: 1, rules, gateway: gate });
+    assert.equal(await drain(welcoming, 5, () => req('/explorer')), null);
+  });
+});

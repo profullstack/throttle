@@ -115,6 +115,22 @@ A caller holding a live pass is **not metered at all**. The pass is the thing
 being sold; counting it against an allowance it bought its way out of would be
 selling the same minute twice.
 
+### Brute-force guards are never sold (security, 0.4.3)
+
+A guard rule (see Headroom above) is a cap on guesses, not a reading
+allowance, so the gateway never touches it:
+
+- Over a guard's limit is always a plain `429` with `retry-after` and the
+  `ratelimit-*` headers, never a `402` offer, and `onThrottle` reports
+  `sold: false, guard: true`.
+- A paid pass and a crawler the gateway welcomes (`isWelcome`) are still
+  metered on a guard. The pass and welcome bypass applies to every other rule.
+
+**Before 0.4.3** both held on guards too: tripping the sign-in limit offered
+to sell a pass, and a 1 USD pass then skipped the sign-in limit entirely,
+which made unlimited password guessing a product. Every site that configures
+a gateway should upgrade.
+
 ## Options
 
 | Option | Default | |

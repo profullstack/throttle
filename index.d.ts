@@ -40,8 +40,10 @@ export interface ThrottleEvent {
   limit: number;
   windowSeconds: number;
   count: number;
-  /** Whether the refusal came with something to buy. */
+  /** Whether the refusal came with something to buy. Always false on a guard. */
   sold: boolean;
+  /** Whether the rule refused on is a brute-force guard (never sold, never bypassed). */
+  guard: boolean;
 }
 
 export interface ThrottleOptions {
