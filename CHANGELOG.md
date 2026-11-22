@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1 (2026-11-22)
+
+**Security.** `exempt` no longer applies to brute-force guard rules (`guard: true`,
+`credential: false`, or an auth-looking path). The throttle used to call
+`exempt` before it looked at any rule, and several sites exempted any request
+whose `Cookie` header merely contained the session cookie's name. A forged
+`Cookie: <name>=x` then skipped every limit, sign-in guards included. Guards
+are now metered for everyone; `exempt` still applies to every other rule.
+
+A route that must never be metered belongs in an `open: true` rule or in
+`openPaths`. To give signed-in callers a bigger budget, use `credentialFrom`
+(a bucket, still under a per-address ceiling), not `exempt`.
+
 ## 0.5.0 (2026-11-22)
 
 **Security.** Brute-force guard rules (`guard: true`, `credential: false`, or an

@@ -73,7 +73,7 @@ export interface ThrottleOptions {
   store?: QuotaStore;
   /** What to count against. Default: the caller's address, as the edge reported it. */
   identify?: (request: Request) => string | null;
-  /** Never metered, e.g. a health check. */
+  /** Never metered, except on a brute-force guard (0.5.1). Must not trust anything the caller can forge, such as a cookie's name. */
   exempt?: (request: Request) => boolean;
   /**
    * What counts as a credential for the larger budget. Default: an

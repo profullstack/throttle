@@ -150,6 +150,41 @@ describe('who is not metered', () => {
     for (let i = 0; i < 5; i++) assert.equal(await throttle.handle(signedIn()), null);
   });
 
+  it('never lets exempt skip a brute-force guard (0.5.1)', async () => {
+    // A forged session cookie is a header anyone can write.
+    const throttle = createThrottle({
+      exempt: (r) => (r.headers.get('cookie') ?? '').includes('session='),
+      rules: [
+        { path: '/auth/', limit: 10, credential: false },
+        { path: '/report', limit: 2, guard: true },
+        { path: '/login', limit: 3 },
+      ],
+    });
+    const forged = (path) => () => req(path, { cookie: 'session=forged' });
+    for (const [path, limit] of [['/auth/link', 10], ['/report', 2], ['/login', 3]]) {
+      for (let i = 0; i < limit; i++) assert.equal(await throttle.handle(forged(path)()), null, `${path} ${i + 1}`);
+      const refused = await throttle.handle(forged(path)());
+      assert.ok(refused, `${path}: request ${limit + 1} is refused`);
+      assert.equal(refused.status, 429);
+    }
+    // Everywhere else exempt still applies.
+    for (let i = 0; i < 50; i++) assert.equal(await throttle.handle(forged('/dashboard')()), null);
+  });
+
+  it('never lets exempt skip a guard that would sell, and still answers 429 not 402', async () => {
+    const throttle = createThrottle({
+      gateway: gateway(),
+      exempt: () => true,
+      rules: [{ path: '/auth/', limit: 10, credential: false }],
+    });
+    const login = () => req('/auth/link', { cookie: 'session=forged', accept: 'application/json' });
+    for (let i = 0; i < 10; i++) assert.equal(await throttle.handle(login()), null);
+    const refused = await throttle.handle(login());
+    assert.equal(refused.status, 429);
+    assert.equal(refused.headers.get('payment-required'), null);
+    assert.ok(!(await refused.text()).includes('accepts'));
+  });
+
   it('does not charge a caller for our own edge losing the address', async () => {
     const throttle = createThrottle({ headroom: 1, limit: 1, identify: () => null });
     for (let i = 0; i < 5; i++) assert.equal(await throttle.handle(req()), null);

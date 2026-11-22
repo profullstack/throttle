@@ -50,7 +50,9 @@ const gateway = createGateway({
 const throttle = createThrottle({
   gateway,                       // over the limit → 402 with an offer
   limit: 100,                    // the default; per caller, per minute
-  exempt: (request) => hasSession(request),
+  // A signed-in caller gets a bigger bucket, never a free pass: a cookie's
+  // presence is something any client can forge.
+  credentialFrom: (request) => sessionIdFrom(request),
   rules: [
     { path: '/api/auth/', limit: 10, credential: false },
     { path: '/health', open: true },
@@ -142,7 +144,7 @@ a gateway should upgrade.
 | `rules` | `[]` | per-path allowances; most specific match wins |
 | `credential` | `{ limit: 600, ceiling: 1200 }` | budget for callers presenting one |
 | `anonymous` | `{ by: 'ip+ua', ceiling: 5 }` | how callers without a credential are bucketed |
-| `exempt` | — | never metered, e.g. a health check |
+| `exempt` | — | never metered, except on a brute-force guard (0.5.1). Only for something the request cannot forge; prefer `open` rules or `credentialFrom` |
 | `credentialFrom` | auth headers | what counts as a credential; read the session cookie too |
 | `openPaths` | — | extra paths never metered |
 | `identify` | the caller's address | what to count against |
