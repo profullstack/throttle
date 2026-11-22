@@ -46,7 +46,7 @@ import { memoryStore } from './store.js';
  * @param {object} [options.gateway]                a @profullstack/x402-gateway; over-limit is answered 402 with its offer
  * @param {object} [options.store]                  shared counter; default is per-process
  * @param {(request: Request) => string|null} [options.identify]  what to count against; default the caller's address
- * @param {(request: Request) => boolean} [options.exempt]        never metered, e.g. a health check
+ * @param {(request: Request) => boolean} [options.exempt]        never metered, except on a brute-force guard; prefer `open` rules or `credentialFrom`
  * @param {(request: Request) => string|null} [options.credentialFrom]  what counts as a credential; default an Authorization or X-API-Key header
  * @param {string[]} [options.openPaths]            extra paths never metered
  * @param {Array} [options.rules]                   per-path allowances, most specific wins
@@ -214,11 +214,20 @@ export function createThrottle(options = {}) {
     const path = new URL(request.url).pathname;
 
     if (matchesAny(openPaths, path)) return null;
-    if (exempt && exempt(request)) return null;
 
     const rule = ruleFor(rules, path, defaults);
     if (rule.open) return null;
     const guard = isGuard(rule);
+
+    /*
+     * `exempt` never reaches a brute-force guard (0.5.1). Sites wrote it as
+     * "the session cookie's name appears in Cookie", which any client can
+     * send: `Cookie: site_session=x` then skipped the sign-in limit entirely,
+     * because exempt ran before any rule was consulted. A route that must be
+     * unmetered is an `open` rule or an `openPaths` entry, both of which are
+     * the site's own words about a path, not the caller's about itself.
+     */
+    if (!guard && exempt && exempt(request)) return null;
 
     /*
      * Whoever already paid is not metered. The pass is the thing being sold;
