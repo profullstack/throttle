@@ -115,7 +115,7 @@ A caller holding a live pass is **not metered at all**. The pass is the thing
 being sold; counting it against an allowance it bought its way out of would be
 selling the same minute twice.
 
-### Brute-force guards are never sold (security, 0.4.3)
+### Brute-force guards are never sold (security, 0.5.0)
 
 A guard rule (see Headroom above) is a cap on guesses, not a reading
 allowance, so the gateway never touches it:
@@ -126,7 +126,7 @@ allowance, so the gateway never touches it:
 - A paid pass and a crawler the gateway welcomes (`isWelcome`) are still
   metered on a guard. The pass and welcome bypass applies to every other rule.
 
-**Before 0.4.3** both held on guards too: tripping the sign-in limit offered
+**Before 0.5.0** both held on guards too: tripping the sign-in limit offered
 to sell a pass, and a 1 USD pass then skipped the sign-in limit entirely,
 which made unlimited password guessing a product. Every site that configures
 a gateway should upgrade.
@@ -141,6 +141,7 @@ a gateway should upgrade.
 | `gateway` | — | an `@profullstack/x402-gateway`; makes over-limit a 402 |
 | `rules` | `[]` | per-path allowances; most specific match wins |
 | `credential` | `{ limit: 600, ceiling: 1200 }` | budget for callers presenting one |
+| `anonymous` | `{ by: 'ip+ua', ceiling: 5 }` | how callers without a credential are bucketed |
 | `exempt` | — | never metered, e.g. a health check |
 | `credentialFrom` | auth headers | what counts as a credential; read the session cookie too |
 | `openPaths` | — | extra paths never metered |
@@ -162,6 +163,26 @@ rules: [
   { path: '/health', open: true },                       // never metered
 ]
 ```
+
+### Anonymous callers: address + user agent
+
+Since 0.5.0 a caller with no credential is counted per address **and** user
+agent (trimmed, lowercased, hashed; no user agent is a bucket of its own), so
+two people behind one NAT in different browsers each get the full allowance.
+The user agent is a header the client writes, so every agent from one address
+also spends a per-address `ceiling`, 5x the rule's limit by default: rotating
+agents can split the allowance but not multiply it. Whichever bucket runs out
+first refuses, and `onThrottle` says which (`bucket: 'ip+ua'` or
+`'ip-ceiling'`) along with the `ua`.
+
+```js
+anonymous: { by: 'ip+ua', ceiling: 5 }  // default
+anonymous: { by: 'ip' }                 // pre-0.5.0: one bucket per address
+```
+
+Brute-force guards ignore both the user agent and any credential: they are
+counted per address only (`bucket: 'guard'`). Subresources keep one bucket per
+address.
 
 ### Credentialed callers
 

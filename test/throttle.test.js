@@ -370,7 +370,7 @@ describe('headroom', () => {
   });
 });
 
-describe('brute-force guards with a gateway (security, 0.4.3)', () => {
+describe('brute-force guards with a gateway (security, 0.5.0)', () => {
   const rules = [
     { path: '/api/auth/', limit: 2, credential: false },
     { path: '/report', limit: 2, guard: true },
@@ -436,5 +436,87 @@ describe('brute-force guards with a gateway (security, 0.4.3)', () => {
     const gate = { ...gateway(), isWelcome: () => true };
     const welcoming = createThrottle({ headroom: 1, limit: 1, rules, gateway: gate });
     assert.equal(await drain(welcoming, 5, () => req('/explorer')), null);
+  });
+});
+
+describe('anonymous callers: address + user agent (0.5.0)', () => {
+  const as = (ua, path = '/explorer', extra = {}) => () => req(path, { 'user-agent': ua, ...extra });
+
+  it('gives two user agents on one address an allowance each', async () => {
+    const throttle = createThrottle({ headroom: 1 });
+    assert.equal(throttle.options.anonymous.by, 'ip+ua');
+    assert.equal(await drain(throttle, 100, as('Firefox/140')), null);
+    assert.equal(await drain(throttle, 100, as('Chrome/145')), null, 'a second browser has its own 100');
+    assert.ok(await throttle.handle(as('Firefox/140')()), 'the 101st from the first is refused');
+  });
+
+  it('normalises the user agent and buckets an empty one on its own', async () => {
+    const throttle = createThrottle({ headroom: 1, limit: 2 });
+    await throttle.handle(as('Chrome/145')());
+    await throttle.handle(as('  CHROME/145 ')());
+    assert.ok(await throttle.handle(as('chrome/145')()), 'same agent after trim + lowercase');
+    assert.equal(await drain(throttle, 2, as('')), null, 'empty UA has its own bucket');
+    assert.ok(await throttle.handle(as('')()));
+  });
+
+  it('caps every agent from one address at 5x the limit', async () => {
+    const events = [];
+    const throttle = createThrottle({ headroom: 1, onThrottle: (e) => events.push(e) });
+    for (let i = 1; i <= 5; i++) assert.equal(await drain(throttle, 100, as(`Agent/${i}`)), null, `agent ${i}`);
+    const refusal = await throttle.handle(as('Agent/6')());
+    assert.equal(refusal?.status, 429, 'the sixth agent hits the 500 ceiling');
+    assert.equal(refusal.headers.get('ratelimit-limit'), '500');
+    assert.equal(events[0].bucket, 'ip-ceiling');
+    assert.equal(events[0].ua, 'Agent/6');
+    const other = await throttle.handle(req('/explorer', { 'user-agent': 'Agent/6', 'x-real-ip': '198.51.100.9' }));
+    assert.equal(other, null, 'another address is untouched');
+  });
+
+  it('reports the per-agent bucket when that runs out first', async () => {
+    const events = [];
+    const throttle = createThrottle({ headroom: 1, limit: 1, onThrottle: (e) => events.push(e) });
+    await drain(throttle, 2, as('Chrome/145'));
+    assert.equal(events[0].bucket, 'ip+ua');
+  });
+
+  it('takes a ceiling multiplier', async () => {
+    const throttle = createThrottle({ headroom: 1, limit: 2, anonymous: { ceiling: 2 } });
+    assert.equal(await drain(throttle, 2, as('a')), null);
+    assert.equal(await drain(throttle, 2, as('b')), null);
+    assert.ok(await throttle.handle(as('c')()));
+  });
+
+  it("by: 'ip' is one bucket per address, as before", async () => {
+    const events = [];
+    const throttle = createThrottle({ headroom: 1, limit: 2, anonymous: { by: 'ip' }, onThrottle: (e) => events.push(e) });
+    await throttle.handle(as('a')());
+    await throttle.handle(as('b')());
+    assert.ok(await throttle.handle(as('c')()));
+    assert.equal(events[0].bucket, 'ip');
+  });
+
+  it('a guard ignores the user agent and any credential', async () => {
+    const events = [];
+    const throttle = createThrottle({
+      rules: [{ path: '/login', limit: 3 }],
+      onThrottle: (e) => events.push(e),
+    });
+    await throttle.handle(as('a', '/login')());
+    await throttle.handle(as('b', '/login', { authorization: 'Bearer one' })());
+    await throttle.handle(as('c', '/login', { 'x-api-key': 'two' })());
+    const refusal = await throttle.handle(as('d', '/login', { authorization: 'Bearer three' })());
+    assert.equal(refusal?.status, 429);
+    assert.equal(events[0].bucket, 'guard');
+    assert.equal(events[0].guard, true);
+  });
+
+  it('leaves the credential path as it was', async () => {
+    const events = [];
+    const throttle = createThrottle({ headroom: 1, onThrottle: (e) => events.push(e) });
+    assert.deepEqual(throttle.options.credential, { limit: 600, ceiling: 1200 });
+    const keyed = (k, ua) => () => req('/api/x', { authorization: `Bearer ${k}`, 'user-agent': ua });
+    assert.equal(await drain(throttle, 600, keyed('k1', 'a')), null);
+    assert.ok(await throttle.handle(keyed('k1', 'b')()), 'a new UA does not refill a credential');
+    assert.equal(events[0].bucket, 'credential');
   });
 });

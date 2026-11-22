@@ -44,6 +44,17 @@ export interface ThrottleEvent {
   sold: boolean;
   /** Whether the rule refused on is a brute-force guard (never sold, never bypassed). */
   guard: boolean;
+  /** The caller's User-Agent as sent (same as userAgent). */
+  ua: string | null;
+  /** Which bucket ran out. */
+  bucket: 'ip+ua' | 'ip-ceiling' | 'ip' | 'credential' | 'guard' | 'subresource';
+}
+
+export interface AnonymousBudget {
+  /** 'ip+ua' (default): one bucket per address + normalized user agent. 'ip': one per address. */
+  by?: 'ip+ua' | 'ip';
+  /** With 'ip+ua', the per-address cap over all its agents, as a multiple of the rule's limit. Default 5. */
+  ceiling?: number;
 }
 
 export interface ThrottleOptions {
@@ -76,6 +87,8 @@ export interface ThrottleOptions {
   rules?: ThrottleRule[];
   /** Budget for callers presenting a credential. `false` to treat them as anonymous. */
   credential?: false | CredentialBudget;
+  /** How uncredentialed callers are bucketed. Default `{ by: 'ip+ua', ceiling: 5 }`. */
+  anonymous?: AnonymousBudget;
   /**
    * Images, fonts, scripts and styles (by Sec-Fetch-Dest) count against their
    * own bucket, so a page full of images never spends the page allowance.
@@ -96,6 +109,7 @@ export interface Throttle {
     headroom: number;
     rules: Required<ThrottleRule>[];
     credential: { limit: number; ceiling: number } | null;
+    anonymous: { by: 'ip+ua' | 'ip'; ceiling: number };
     subresources: { limit: number } | null;
     openPaths: string[];
     gateway: boolean;

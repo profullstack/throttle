@@ -51,6 +51,7 @@ import { memoryStore } from './store.js';
  * @param {string[]} [options.openPaths]            extra paths never metered
  * @param {Array} [options.rules]                   per-path allowances, most specific wins
  * @param {{limit?: number, ceiling?: number}} [options.credential]  budget for callers presenting a credential
+ * @param {{by?: 'ip+ua'|'ip', ceiling?: number}} [options.anonymous]  how uncredentialed callers are bucketed; default per address + user agent, under a per-address ceiling of 5x the rule's limit
  * @param {false|{limit?: number}} [options.subresources]  separate budget for images, fonts, scripts and styles; default 1000
  * @param {(event: object) => void|Promise<void>} [options.onThrottle]  told about every refusal; its errors are swallowed
  */
@@ -117,6 +118,20 @@ export function createThrottle(options = {}) {
    * a header the client writes; a scraper that claims every page is an image
    * buys itself a bigger bucket, not an unmetered site.
    */
+  /*
+   * Anonymous callers are counted per address + user agent, so two people
+   * behind one NAT (an office, a phone carrier, a university) running
+   * different browsers do not share one allowance. A per-address ceiling
+   * across all of those buckets is what a caller rotating user agents cannot
+   * escape: the UA is a header the client writes, so it may split the
+   * allowance but never multiply it past `ceiling` times the rule's limit.
+   * `by: 'ip'` is the pre-0.5.0 behaviour, one bucket per address.
+   */
+  const anonymous = {
+    by: options.anonymous?.by === 'ip' ? 'ip' : 'ip+ua',
+    ceiling: positiveReal(options.anonymous?.ceiling, 5),
+  };
+
   const subresources = options.subresources === false ? null : {
     limit: scale(positive(options.subresources?.limit, 1000)),
   };
@@ -158,15 +173,17 @@ export function createThrottle(options = {}) {
    *
    * A brute-force guard is never sold, gateway or not. Its limit is a cap on
    * password guesses, not a reading allowance, and offering a pass at the
-   * moment it trips is offering to sell unlimited guessing (0.4.3).
+   * moment it trips is offering to sell unlimited guessing (0.5.0).
    */
-  async function refuse(request, rule, usage, guard = false) {
+  async function refuse(request, rule, usage, { guard = false, bucket }) {
     const sold = !guard && Boolean(gateway?.enabled);
     if (onThrottle) {
       try {
         await onThrottle({
           url: request.url,
           userAgent: request.headers.get('user-agent') ?? null,
+          ua: request.headers.get('user-agent') ?? null,
+          bucket,
           limit: rule.limit,
           windowSeconds: rule.windowSeconds,
           count: usage.count,
@@ -209,7 +226,7 @@ export function createThrottle(options = {}) {
      * bought its way out of, is selling the same minute twice.
      *
      * Except on a brute-force guard. A pass buys reading, never guesses: until
-     * 0.4.3 a 1 USD pass (or a crawler the gateway welcomed) skipped the
+     * 0.5.0 a 1 USD pass (or a crawler the gateway welcomed) skipped the
      * sign-in limit entirely, which made unlimited password guessing a
      * product. Guards are metered for everyone.
      */
@@ -240,6 +257,17 @@ export function createThrottle(options = {}) {
      * Authorization header onto every guess and buy itself the integration
      * budget.
      */
+    /*
+     * A brute-force guard is counted per address only. Neither a user agent
+     * nor a credential is allowed to split it: both are headers the guesser
+     * writes, and each would hand it a fresh budget of guesses.
+     */
+    if (guard) {
+      const usage = await spend(quotaFor(rule), `${rule.path || '*'}:${key}`);
+      if (usage?.overLimit) return refuse(request, rule, usage, { guard, bucket: 'guard' });
+      return null;
+    }
+
     const honoursCredential = Boolean(credential) && rule.credential !== false;
     const presented = honoursCredential ? credentialFrom(request) : null;
     if (presented) {
@@ -251,20 +279,34 @@ export function createThrottle(options = {}) {
        * The host ceiling is what a credential-rotating caller cannot escape,
        * so a denial there beats a healthy per-credential budget.
        */
-      if (ceiling?.overLimit) return refuse(request, ceilingRule, ceiling, guard);
-      if (perKey?.overLimit) return refuse(request, perKeyRule, perKey, guard);
+      if (ceiling?.overLimit) return refuse(request, ceilingRule, ceiling, { bucket: 'credential' });
+      if (perKey?.overLimit) return refuse(request, perKeyRule, perKey, { bucket: 'credential' });
       return null;
     }
 
     if (subresources && isSubresource(request)) {
       const assetRule = { ...rule, limit: subresources.limit };
       const usage = await spend(quotaFor(assetRule), `asset:${rule.path || '*'}:${key}`);
-      if (usage?.overLimit) return refuse(request, assetRule, usage, guard);
+      if (usage?.overLimit) return refuse(request, assetRule, usage, { bucket: 'subresource' });
       return null;
     }
 
-    const usage = await spend(quotaFor(rule), `${rule.path || '*'}:${key}`);
-    if (usage?.overLimit) return refuse(request, rule, usage, guard);
+    const scope = rule.path || '*';
+    if (anonymous.by === 'ip') {
+      const usage = await spend(quotaFor(rule), `${scope}:${key}`);
+      if (usage?.overLimit) return refuse(request, rule, usage, { bucket: 'ip' });
+      return null;
+    }
+
+    /*
+     * Both buckets are charged; whichever runs out first refuses. The ceiling
+     * is checked first because it is the one a UA-rotating caller hits.
+     */
+    const ceilingRule = { ...rule, limit: Math.floor(rule.limit * anonymous.ceiling) };
+    const ceiling = await spend(quotaFor(ceilingRule), `anon-ceiling:${scope}:${key}`);
+    const perAgent = await spend(quotaFor(rule), `${scope}:${key}:ua:${fingerprint(normaliseAgent(request))}`);
+    if (ceiling?.overLimit) return refuse(request, ceilingRule, ceiling, { bucket: 'ip-ceiling' });
+    if (perAgent?.overLimit) return refuse(request, rule, perAgent, { bucket: 'ip+ua' });
     return null;
   }
 
@@ -272,7 +314,7 @@ export function createThrottle(options = {}) {
     handle,
     /** For tests and for a site that wants to reclaim memory on demand. */
     store,
-    options: { ...defaults, headroom, rules, credential, subresources, openPaths, gateway: Boolean(gateway) },
+    options: { ...defaults, headroom, rules, credential, anonymous, subresources, openPaths, gateway: Boolean(gateway) },
   };
 }
 
@@ -285,6 +327,11 @@ const SUBRESOURCE = new Set(['image', 'font', 'style', 'script', 'audio', 'video
 
 export function isSubresource(request) {
   return SUBRESOURCE.has(request.headers.get('sec-fetch-dest') ?? '');
+}
+
+/** Trimmed and lowercased; a request with no user agent is its own bucket. */
+function normaliseAgent(request) {
+  return (request.headers.get('user-agent') ?? '').trim().toLowerCase();
 }
 
 function positiveReal(value, fallback) {
